@@ -14,7 +14,7 @@ import datetime
 import torch
 from torchvision import datasets, transforms
 from utils.soft_n_cut_loss import soft_n_cut_loss
-from utils.org_soft_n_cut_loss import batch_soft_n_cut_loss
+from utils.org_soft_n_cut_loss import batch_soft_n_cut_loss, NCutLoss2D
 
 import WNet
 import matplotlib.pyplot as plt
@@ -37,10 +37,12 @@ parser.add_argument('--output_folder', metavar='of', default=None, type=str,
 
 softmax = nn.Softmax2d()
 sigmoid = nn.Sigmoid()
+ncutloss = NCutLoss2D()
+criterionIdt = torch.nn.MSELoss(reduction='sum')
 
 def train_op(model, optimizer, input, k, psi=0.5):
     enc = model(input, returns='enc') # The output of the UEnc is a normalized 224 × 224 × K dense prediction.
-    n_cut_loss=batch_soft_n_cut_loss(input, softmax(enc), k)
+    n_cut_loss=ncutloss(softmax(enc), input)
     n_cut_loss.backward() 
     optimizer.step()
     optimizer.zero_grad()
@@ -52,14 +54,13 @@ def train_op(model, optimizer, input, k, psi=0.5):
     return (model, n_cut_loss, rec_loss)
 
 def reconstruction_loss(x, x_prime):
-    criterionIdt = torch.nn.MSELoss()
     rec_loss = criterionIdt(x_prime, x)
     return rec_loss
 
 def test():
     wnet=WNet.WNet(4)
     synthetic_data=torch.rand((1, 3, 128, 128))
-    optimizer=torch.optim.SGD(wnet.parameters(), 0.001) #.cuda()
+    optimizer=torch.optim.SGD(wnet.parameters(), 0.001).cuda()
     train_op(wnet, optimizer, synthetic_data)
 
 def show_image(image):
@@ -80,7 +81,7 @@ def main():
 
     # Squeeze k
     k = args.squeeze
-    img_size = (64, 64)
+    img_size = (224, 224)
     wnet = WNet.WNet(k)
     if(CUDA):
         wnet = wnet.cuda()
@@ -92,9 +93,11 @@ def main():
     dataset = datasets.ImageFolder(args.input_folder, transform=transform)
 
     # Train 1 image set batch size=1 and set shuffle to False
-    dataloader = torch.utils.data.DataLoader(dataset, batch_size=10, shuffle=True)
+    dataloader = torch.utils.data.DataLoader(dataset, batch_size=5, shuffle=True)
 
     # Run for every epoch
+    
+    
     for epoch in range(args.epochs):
 
         # At 1000 epochs divide SGD learning rate by 10
@@ -108,17 +111,20 @@ def main():
         # Create empty lists for N_cut losses and reconstruction losses
         n_cut_losses = []
         rec_losses = []
+        l = 17000/5
         start_time = time.time()
-
         for (idx, batch) in enumerate(dataloader):
             # Train 1 image idx > 1
-            # if(idx > 1): break
+            if(idx > 20): break
 
             # Train Wnet with CUDA if available
             if CUDA:
                 batch[0] = batch[0].cuda()
             
-            wnet, n_cut_loss, rec_loss = train_op(wnet, optimizer, batch[0].cuda(), k, img_size)
+            wnet, n_cut_loss, rec_loss = train_op(wnet, optimizer, batch[0], k, img_size)
+            
+            print(str(idx) + "/" + str(l))
+            print("--- %s seconds ---" % (time.time() - start_time))
 
             n_cut_losses.append(n_cut_loss.detach())
             rec_losses.append(rec_loss.detach())
