@@ -13,8 +13,8 @@ import time
 import datetime
 import torch
 from torchvision import datasets, transforms
-from utils.soft_n_cut_loss import soft_n_cut_loss
 from utils.org_soft_n_cut_loss import batch_soft_n_cut_loss, NCutLoss2D
+from utils.soft_n_cut_loss import soft_n_cut_loss
 
 import WNet
 import matplotlib.pyplot as plt
@@ -36,21 +36,21 @@ parser.add_argument('--output_folder', metavar='of', default=None, type=str,
                     help='folder of output images')
 
 softmax = nn.Softmax2d()
-sigmoid = nn.Sigmoid()
-ncutloss = NCutLoss2D()
-criterionIdt = torch.nn.MSELoss(reduction='sum')
 
-def train_op(model, optimizer, input, k, psi=0.5):
-    enc = model(input, returns='enc') # The output of the UEnc is a normalized 224 × 224 × K dense prediction.
-    n_cut_loss=ncutloss(softmax(enc), input)
-    n_cut_loss.backward() 
+def train_op(model, optimizer, input, k, img_size, psi=0.5):
+    enc = model(input, returns='enc')
+    d = enc.clone().detach()
+    n_cut_loss=batch_soft_n_cut_loss_new(input,  softmax(enc),  img_size)
+    n_cut_loss.backward()
     optimizer.step()
     optimizer.zero_grad()
+
     dec = model(input, returns='dec')
     rec_loss=reconstruction_loss(input, dec)
     rec_loss.backward()
     optimizer.step()
     optimizer.zero_grad()
+
     return (model, n_cut_loss, rec_loss)
 
 def reconstruction_loss(x, x_prime):
@@ -87,9 +87,10 @@ def main():
         wnet = wnet.cuda()
     learning_rate = 0.003
     optimizer = torch.optim.SGD(wnet.parameters(), lr=learning_rate)
-    # transforms.CenterCrop(224),
+
     transform = transforms.Compose([transforms.Resize(img_size),
                                 transforms.ToTensor()])
+
     dataset = datasets.ImageFolder(args.input_folder, transform=transform)
 
     # Train 1 image set batch size=1 and set shuffle to False
@@ -101,7 +102,7 @@ def main():
     for epoch in range(args.epochs):
 
         # At 1000 epochs divide SGD learning rate by 10
-        if (epoch % 1000 == 0):
+        if (epoch > 0 and epoch % 1000 == 0):
             learning_rate = learning_rate/10
             optimizer = torch.optim.SGD(wnet.parameters(), lr=learning_rate)
 

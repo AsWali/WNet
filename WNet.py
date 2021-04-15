@@ -33,11 +33,11 @@ class Block(nn.Module):
         
         
         self.relu1 = nn.ReLU()
-        self.dropout1 = nn.Dropout(0.65) 
+        self.dropout1 = nn.Dropout(0) 
         self.batchnorm1=nn.BatchNorm2d(out_filters)
         
         self.relu2 = nn.ReLU()
-        self.dropout2 = nn.Dropout(0.65) 
+        self.dropout2 = nn.Dropout(0) 
         self.batchnorm2=nn.BatchNorm2d(out_filters)
 
     def forward(self, x):
@@ -71,6 +71,7 @@ class UEnc(nn.Module):
         self.dec4=Block(2*ch_mul, ch_mul, seperable=False)
         
         self.final=nn.Conv2d(ch_mul, squeeze, kernel_size=(1, 1))
+        self.softmax = nn.Softmax2d()
         
     def forward(self, x):
         
@@ -100,7 +101,7 @@ class UEnc(nn.Module):
         
         
         final=self.final(dec4)
-        
+            
         return final
 
 class UDec(nn.Module):

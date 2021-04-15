@@ -1,141 +1,62 @@
-# Some methods in this file ported to Pytorch from https://github.com/Ashish77IITM/W-Net/
-
+import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.autograd import Function
-import time
 import numpy as np
+from torch.nn.modules.utils import _pair, _quadruple
 
-# The weight matrix w is a measure of the weight between each pixel and
-# every other pixel. so w[u][v] is a measure of
-#   (a) Distance between the brightness of the two pixels.
-#   (b) Distance in positon between the two pixels
 
-# The NCut loss metric is then:
-#   (a) association:    sum(weight_connection) * P(both pixels in the connection are in the class)
-#   (b) disassociation: sum(weight_connection) * P(first pixel is in the class)
-#   N Cut loss = disassociation / association
+def soft_n_cut_loss_single_k(input, enc, batch_size, k, img_size=(64, 64), ox=4, radius=5 ,oi=10):
+    channels = 1
+    image = torch.mean(input, dim=1, keepdim=True)
+    h, w = img_size
+    p = radius
 
-def soft_n_cut_loss(inputs, segmentations, K, img_shape):
-    # We don't do n_cut_loss batch wise -- split it up and do it instance wise
-    loss = 0
-    for i in range(inputs.shape[0]):
-        flatten_image = torch.mean(inputs[i], dim=0)
-        flatten_image = flatten_image.reshape(flatten_image.shape[0]**2)
-        loss += soft_n_cut_loss_(flatten_image, segmentations[i], K, img_shape[0], img_shape[1])
-    loss = loss / inputs.shape[0]
-    return loss
+    image = F.pad(input=image, pad=(p, p, p, p), mode='constant', value=99999)
+    encoding = F.pad(input=enc, pad=(p, p, p, p), mode='constant', value=99999)
 
-def soft_n_cut_loss_(flatten_image, prob, k, rows, cols):
-    '''
-    Inputs:
-    prob : (rows*cols*k) tensor
-    k : number of classes (integer)
-    flatten_image : 1 dim tf array of the row flattened image ( intensity is the average of the three channels)
-    rows : number of the rows in the original image
-    cols : number of the cols in the original image
-    Output :
-    soft_n_cut_loss tensor for a single image
-    '''
+    kh, kw = radius*2 + 1, radius*2 + 1
+    dh, dw = 1, 1
 
-    soft_n_cut_loss = k
-    weights = edge_weights(flatten_image, rows,cols)
-    for t in range(k):
-        soft_n_cut_loss = soft_n_cut_loss - (numerator(prob[t,:,],weights)/denominator(prob[t,:,:],weights))
+    patches = image.unfold(2, kh, dh).unfold(3, kw, dw)
+    seg = encoding.unfold(2, kh, dh).unfold(3, kw, dw)
 
-    return soft_n_cut_loss
+    patches = patches.contiguous().view(batch_size, channels, -1, kh, kw)
+    seg = seg.contiguous().view(batch_size, channels, -1, kh, kw)
+    patches = patches.permute(0, 2, 1, 3, 4)
+    patches = patches.view(-1, channels, kh, kw)
+    seg = seg.permute(0, 2, 1, 3, 4)
+    seg = seg.view(-1, channels, kh, kw)
 
-def edge_weights(flatten_image, rows, cols, std_intensity=3, std_position=1, radius=5):
-    '''
-    Inputs :
-    flatten_image : 1 dim tf array of the row flattened image ( intensity is the average of the three channels)
-    std_intensity : standard deviation for intensity
-    std_position : standard devistion for position
-    radius : the length of the around the pixel where the weights
-    is non-zero
-    rows : rows of the original image (unflattened image)
-    cols : cols of the original image (unflattened image)
-    Output :
-    weights :  2d tf array edge weights in the pixel graph
-    Used parameters :
-    n : number of pixels
-    '''
-    ones = torch.ones_like(flatten_image, dtype=torch.float)
+    center_values = patches[:, :, radius, radius]
+    center_values = center_values[:, :, None, None]
+    center_values = center_values.expand(-1, -1, kh, kw)
+
+    k_row = (torch.arange(1, kh + 1) - torch.arange(1, kh + 1)[radius]).expand(kh, kw)
+
     if torch.cuda.is_available():
-        ones = ones.cuda()
+        k_row = k_row.cuda()
 
-    A = outer_product(flatten_image, ones)
-    A_T = torch.t(A)
-    d = torch.div((A - A_T), std_intensity)
-    intensity_weight = torch.exp(-1*torch.mul(d, d))
+    distance_weights = (k_row ** 2 + k_row.T**2)
 
-    xx, yy = torch.meshgrid(torch.arange(rows, dtype=torch.float), torch.arange(cols, dtype=torch.float))
-    xx = xx.reshape(rows*cols)
-    yy = yy.reshape(rows*cols)
-    if torch.cuda.is_available():
-        xx = xx.cuda()
-        yy = yy.cuda()
-    ones_xx = torch.ones_like(xx, dtype=torch.float)
-    ones_yy = torch.ones_like(yy, dtype=torch.float)
-    if torch.cuda.is_available():
-        ones_yy = ones_yy.cuda()
-        ones_xx = ones_xx.cuda()
-    A_x = outer_product(xx, ones_xx)
-    A_y = outer_product(yy, ones_yy)
+    mask = distance_weights.le(radius)
+    distance_weights = torch.exp(torch.div(-1*(distance_weights), ox**2))
+    distance_weights = torch.mul(mask, distance_weights)
+    # the 0's from the padding may cause an issue
+    patches = torch.exp(torch.div(-1*((patches - center_values)**2), oi**2))
+    W = torch.mul(patches, distance_weights)
+    d = W * seg
 
-    xi_xj = A_x - torch.t(A_x)
-    yi_yj = A_y - torch.t(A_y)
+    nominator = torch.sum(enc * torch.sum(d, dim=(1,2,3)).reshape(batch_size, h, w), dim=(1,2,3))
+    denominator = torch.sum(enc * torch.sum(W, dim=(1,2,3)).reshape(batch_size, h, w), dim=(1,2,3))
 
-    sq_distance_matrix = torch.mul(xi_xj, xi_xj) + torch.mul(yi_yj, yi_yj)
+    return torch.div(nominator, denominator)
 
-    # Might have to consider casting as float32 instead of creating meshgrid as float32
-
-    dist_weight = torch.exp(-torch.div(sq_distance_matrix,std_position**2))
-    weight = torch.mul(intensity_weight, dist_weight) # Element wise product
-
-
-    # ele_diff = tf.reshape(ele_diff, (rows, cols))
-    # w = ele_diff + distance_matrix
-    return weight
-
-def outer_product(v1,v2):
-    '''
-    Inputs:
-    v1 : m*1 tf array
-    v2 : m*1 tf array
-    Output :
-    v1 x v2 : m*m array
-    '''
-    v1 = v1.reshape(-1)
-    v2 = v2.reshape(-1)
-    v1 = torch.unsqueeze(v1, dim=0)
-    v2 = torch.unsqueeze(v2, dim=0)
-    return torch.matmul(torch.t(v1),v2)
-
-def numerator(k_class_prob,weights):
-    '''
-    Inputs :
-    k_class_prob : k_class pixelwise probability (rows*cols) tensor
-    weights : edge weights n*n tensor
-    '''
-    k_class_prob = k_class_prob.reshape(-1)
-    a = torch.mul(weights,outer_product(k_class_prob,k_class_prob))
-    return torch.sum(a)
-
-def denominator(k_class_prob,weights):
-    '''
-    Inputs:
-    k_class_prob : k_class pixelwise probability (rows*cols) tensor
-    weights : edge weights	n*n tensor
-    '''
-    k_class_prob = k_class_prob.view(-1)
-    return torch.sum(
-        torch.mul(
-            weights,
-            outer_product(
-                k_class_prob,
-                torch.ones_like(k_class_prob)
-                )
-            )
-        )
+def soft_n_cut_loss(image, enc, img_size):
+    loss = []
+    batch_size = image.shape[0]
+    k = enc.shape[1]
+    for i in range(0, k):
+        loss.append(soft_n_cut_loss_single_k(image, enc[:, (i,), :, :], batch_size, k, img_size))
+    da = torch.stack(loss)
+    return torch.mean(k - torch.sum(da, dim=0))

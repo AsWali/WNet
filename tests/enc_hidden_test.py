@@ -28,11 +28,11 @@ from utils.crf import dense_crf
 
 
 parser = argparse.ArgumentParser(description='PyTorch Unsupervised Segmentation with WNet')
-parser.add_argument('--model', metavar='C', default="model", type=str, 
+parser.add_argument('--model', metavar='C', default="model_20210415210220", type=str, 
                     help='name of the saved model')
 parser.add_argument('--image', metavar='C', default=None, type=str, 
                     help='path to the image')
-parser.add_argument('--squeeze', metavar='K', default=4, type=int, 
+parser.add_argument('--squeeze', metavar='K', default=20, type=int, 
                     help='Depth of squeeze layer')
 
 def show_image(image):
@@ -61,7 +61,7 @@ def main():
 
     enc, dec = model(x)
     show_image(x[0])
-    plt.imshow(torch.sum(enc, dim = 1).detach()[0])
+    plt.imshow(torch.argmax(enc, dim = 1).detach()[0])
     plt.show()
     show_image(dec[0, :, :, :].detach())
 
