@@ -13,7 +13,7 @@ import time
 import datetime
 import torch
 from torchvision import datasets, transforms
-from utils.org_soft_n_cut_loss import batch_soft_n_cut_loss, NCutLoss2D
+from utils.org_soft_n_cut_loss import batch_soft_n_cut_loss
 from utils.soft_n_cut_loss import soft_n_cut_loss
 
 import WNet
