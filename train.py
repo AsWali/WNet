@@ -36,6 +36,7 @@ parser.add_argument('--output_folder', metavar='of', default=None, type=str,
                     help='folder of output images')
 
 softmax = nn.Softmax2d()
+criterionIdt = nn.MSELoss()
 
 def train_op(model, optimizer, input, k, img_size, psi=0.5):
     enc = model(input, returns='enc')
