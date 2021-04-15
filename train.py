@@ -40,7 +40,7 @@ softmax = nn.Softmax2d()
 def train_op(model, optimizer, input, k, img_size, psi=0.5):
     enc = model(input, returns='enc')
     d = enc.clone().detach()
-    n_cut_loss=batch_soft_n_cut_loss_new(input,  softmax(enc),  img_size)
+    n_cut_loss=soft_n_cut_loss(input,  softmax(enc),  img_size)
     n_cut_loss.backward()
     optimizer.step()
     optimizer.zero_grad()
